@@ -273,65 +273,73 @@ func (l *list) updateKeys(k tea.KeyMsg) (screen, tea.Cmd) {
 func (l *list) View() string {
 	e := l.e
 	w := e.width
-	var b strings.Builder
-
-	head := sTitle.Render("wrk") + sDim.Render(" · ") + sBold.Render(e.m.Repo.Name) +
-		sDim.Render(fmt.Sprintf(" · %d worktrees · base ", len(l.wts))) + sCyan.Render(l.base)
-	if l.loading || l.fetching {
-		head += "  " + l.spin.View()
+	right := ""
+	switch {
+	case l.fetching:
+		right = l.spin.View() + " fetching"
+	case l.loading:
+		right = l.spin.View() + " loading"
 	}
-	b.WriteString(" " + head + "\n")
+	info := fmt.Sprintf("%d worktrees  ·  base %s", len(l.wts), l.base)
+	header := headerBar(w, e.m.Repo.Name, info, right)
+	keys := help("enter", "cd", "/", "search", "n", "new", "d", "delete", "c", "commit", "m", "merge", "P", "PR", "o", "open", "?", "more")
+
+	var top strings.Builder
 	if l.filtering || l.filter.Value() != "" {
-		b.WriteString(" " + l.filter.View() + "\n")
+		top.WriteString(" " + l.filter.View() + "\n")
 	} else {
-		b.WriteString("\n")
+		top.WriteString(" " + sDim.Render("/ search  ·  ● current worktree") + "\n")
 	}
 	if l.pending != nil {
-		b.WriteString(" " + sYellow.Render(fmt.Sprintf("⚠ merge of %s into %s stopped on conflicts — press M to resolve", l.pending.Source, l.pending.Target)) + "\n")
+		top.WriteString(" " + sYellow.Render(fmt.Sprintf("⚠ merge of %s into %s stopped on conflicts — press M to resolve", l.pending.Source, l.pending.Target)) + "\n")
 	}
 	if l.err != nil {
-		b.WriteString(" " + sErr.Render(errText(l.err)) + "\n")
+		top.WriteString(" " + sErr.Render(errText(l.err)) + "\n")
 	}
 	if l.showHelp {
-		b.WriteString(l.helpView())
-		return b.String()
+		hv := l.helpView()
+		return frame(e, header, top.String()+"\n"+indent(panel("Keyboard shortcuts", hv, min(w-2, 72), lipgloss.Height(hv)+2, true), 1), help("any key", "close"))
 	}
 
-	nameW := 0
+	nameW := 6
 	for _, wt := range l.view {
-		if n := lipgloss.Width(wt.Name()); n > nameW {
-			nameW = n
-		}
+		nameW = max(nameW, lipgloss.Width(wt.Name()))
 	}
-	nameW += 2
-	if nameW > w/3 {
-		nameW = w / 3
-	}
-	if nameW < 12 {
-		nameW = 12
-	}
-	listH := e.height - 8
-	if l.pending != nil {
-		listH--
-	}
+	nameW = min(max(nameW+2, 12), w/3)
+
+	// Column headings + rule.
+	cols := "   " + sColHead.Render(pad("BRANCH", nameW)) + " " + sColHead.Render(pad("STATUS", colStatus)) + " " +
+		sColHead.Render(pad("SYNC", colSync)) + " " + sColHead.Render(pad("AGE", colAge)) + " " + sColHead.Render("LAST COMMIT")
+	top.WriteString(truncate(cols, w) + "\n")
+	top.WriteString(sRule.Render(strings.Repeat("─", w)) + "\n")
+
+	const detailsH = 4
+	avail := e.height - 1 - 1 - 2 // status line, header, footer
+	listH := avail - lipgloss.Height(strings.TrimSuffix(top.String(), "\n")) - detailsH
+	listH = max(listH, 1)
 	start := 0
 	if l.cur >= listH {
 		start = l.cur - listH + 1
 	}
+	var rows []string
 	if len(l.view) == 0 && !l.loading {
-		b.WriteString(sDim.Render("   no worktrees match") + "\n")
+		rows = append(rows, sDim.Render("   no worktrees match"))
 	}
 	for i := start; i < len(l.view) && i < start+listH; i++ {
-		b.WriteString(l.row(l.view[i], i == l.cur, nameW, w) + "\n")
+		rows = append(rows, l.row(l.view[i], i == l.cur, nameW, w))
 	}
-	used := lipgloss.Height(b.String())
-	if n := e.height - 3 - used; n > 0 {
-		b.WriteString(strings.Repeat("\n", n))
+	for len(rows) < listH {
+		rows = append(rows, "")
 	}
-	b.WriteString(l.details(w) + "\n")
-	b.WriteString(" " + help("enter", "cd", "/", "search", "n", "new", "d", "delete", "c", "commit", "m", "merge", "P", "PR", "o", "open", "?", "more"))
-	return b.String()
+	body := top.String() + strings.Join(rows, "\n") + "\n" + l.details(w, detailsH)
+	return frame(e, header, body, keys)
 }
+
+const (
+	colStatus = 16
+	colSync   = 8
+	colAge    = 4
+)
 
 func (l *list) row(wt git.Worktree, sel bool, nameW, width int) string {
 	st, have := l.statuses[wt.Path]
@@ -352,21 +360,7 @@ func (l *list) row(wt git.Worktree, sel bool, nameW, width int) string {
 		stat = sRed.Render("error")
 	default:
 		stat = statusText(st)
-		if st.Upstream == "" {
-			ab = sDim.Render("—")
-		} else {
-			var parts []string
-			if st.Ahead > 0 {
-				parts = append(parts, sGreen.Render(fmt.Sprintf("↑%d", st.Ahead)))
-			}
-			if st.Behind > 0 {
-				parts = append(parts, sRed.Render(fmt.Sprintf("↓%d", st.Behind)))
-			}
-			if len(parts) == 0 {
-				parts = append(parts, sDim.Render("="))
-			}
-			ab = strings.Join(parts, " ")
-		}
+		ab = syncText(st)
 		if !st.CommitTime.IsZero() {
 			age = worktree.HumanDuration(time.Since(st.CommitTime))
 		}
@@ -382,13 +376,30 @@ func (l *list) row(wt git.Worktree, sel bool, nameW, width int) string {
 	if sel {
 		name = sAccent.Bold(true).Render(name)
 	}
-	line := marker + name + " " + pad(stat, 16) + " " + pad(ab, 9) + " " + sDim.Render(pad(age, 4)) + " "
-	rest := width - lipgloss.Width(line) - lipgloss.Width(tags) - 1
+	line := marker + name + " " + pad(stat, colStatus) + " " + pad(ab, colSync) + " " + sDim.Render(pad(age, colAge)) + " "
+	rest := width - lipgloss.Width(line) - lipgloss.Width(tags) - 2
 	line += truncate(subj, rest) + tags
 	if sel {
 		return sAccent.Render("▌") + line
 	}
 	return " " + line
+}
+
+func syncText(st git.Status) string {
+	if st.Upstream == "" {
+		return sDim.Render("—")
+	}
+	var parts []string
+	if st.Ahead > 0 {
+		parts = append(parts, sGreen.Render(fmt.Sprintf("↑%d", st.Ahead)))
+	}
+	if st.Behind > 0 {
+		parts = append(parts, sRed.Render(fmt.Sprintf("↓%d", st.Behind)))
+	}
+	if len(parts) == 0 {
+		return sDim.Render("=")
+	}
+	return strings.Join(parts, " ")
 }
 
 func statusText(st git.Status) string {
@@ -411,48 +422,90 @@ func statusText(st git.Status) string {
 	return sYellow.Render("● ") + strings.Join(parts, " ")
 }
 
-func (l *list) details(width int) string {
+func shortPath(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
+		return "~" + strings.TrimPrefix(p, home)
+	}
+	return p
+}
+
+func (l *list) details(width, h int) string {
 	wt := l.selected()
 	if wt == nil {
-		return ""
+		return panel("", "", width, h, false)
 	}
-	p := wt.Path
-	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home) {
-		p = "~" + strings.TrimPrefix(p, home)
+	label := func(s string) string { return sDim.Render(pad(s, 9)) }
+	line1 := label("path") + shortPath(wt.Path)
+	var line2 string
+	st, ok := l.statuses[wt.Path]
+	switch {
+	case wt.Prunable:
+		line2 = label("status") + sRed.Render("directory is missing — prune to clean up")
+	case ok && st.Err == nil:
+		var parts []string
+		add := func(n int, what string, s lipgloss.Style) {
+			if n > 0 {
+				parts = append(parts, s.Render(fmt.Sprintf("%d %s", n, what)))
+			}
+		}
+		add(st.Conflicts, "conflicted", sRed)
+		add(st.Staged, "staged", sGreen)
+		add(st.Unstaged, "modified", sYellow)
+		add(st.Untracked, "untracked", sDim)
+		if len(parts) == 0 {
+			parts = append(parts, sGreen.Render("clean"))
+		}
+		line2 = label("status") + strings.Join(parts, sDim.Render(" · "))
+		if st.Upstream != "" {
+			line2 += sDim.Render("   upstream ") + st.Upstream + " " + syncText(st)
+		} else if !wt.Bare {
+			line2 += sDim.Render("   not pushed")
+		}
 	}
-	s := " " + sDim.Render("path ") + p
-	if st, ok := l.statuses[wt.Path]; ok && st.Upstream != "" {
-		s += sDim.Render("  upstream ") + st.Upstream
+	if wt.Locked {
+		reason := wt.LockReason
+		if reason == "" {
+			reason = "locked"
+		}
+		line2 += sYellow.Render("   🔒 " + reason)
 	}
-	if wt.Locked && wt.LockReason != "" {
-		s += sYellow.Render("  locked: " + wt.LockReason)
-	}
-	return truncate(s, width)
+	return panel(wt.Name(), line1+"\n"+line2, width, h, false)
 }
 
 func (l *list) helpView() string {
-	rows := [][2]string{
-		{"enter", "cd into worktree (needs shell integration)"},
-		{"/", "fuzzy search · esc clears"},
-		{"j/k ↑/↓", "move"},
-		{"n", "new worktree (new, local, remote branch or PR)"},
-		{"d", "delete worktree (like git worktree remove; branch kept)"},
-		{"c", "commit: stage files / hunks / lines"},
-		{"m", "merge branch locally (merge, ff, squash, rebase)"},
-		{"P", "push and open a pull request in the browser"},
-		{"p", "prune merged, stale or missing worktrees"},
-		{"o", "open in editor"},
-		{"f", "git fetch --all --prune"},
-		{"r", "refresh"},
-		{"q", "quit"},
+	groups := []struct {
+		title string
+		rows  [][2]string
+	}{
+		{"Navigate", [][2]string{
+			{"enter", "cd into worktree"},
+			{"/", "fuzzy search (esc clears)"},
+			{"j/k ↑/↓", "move"},
+		}},
+		{"Worktrees", [][2]string{
+			{"n", "new (branch, remote branch or PR)"},
+			{"d", "delete (git worktree remove; branch kept)"},
+			{"o", "open in editor"},
+			{"p", "prune merged / stale / missing"},
+		}},
+		{"Git", [][2]string{
+			{"c", "commit (files, hunks, lines)"},
+			{"m", "merge locally"},
+			{"P", "push & open pull request"},
+			{"f · r · q", "fetch · refresh · quit"},
+		}},
 	}
 	var b strings.Builder
-	b.WriteString("\n")
-	for _, r := range rows {
-		b.WriteString("   " + sKey.Render(pad(r[0], 10)) + " " + r[1] + "\n")
+	for i, g := range groups {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(sSection.Render(g.title) + "\n")
+		for _, r := range g.rows {
+			b.WriteString("  " + sKey.Render(pad(r[0], 10)) + " " + r[1] + "\n")
+		}
 	}
-	b.WriteString("\n   " + sDim.Render("press any key to close"))
-	return b.String()
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // ------------------------------------------------------------- actions --

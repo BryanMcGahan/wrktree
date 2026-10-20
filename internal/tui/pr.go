@@ -131,48 +131,59 @@ func (p *prScreen) pickBase() tea.Cmd {
 }
 
 func (p *prScreen) View() string {
+	e := p.e
+	w := e.width - 2
+	right := ""
+	if p.busy || p.info == nil {
+		right = p.spin.View() + " working"
+	}
+	header := headerBar(e.width, "Pull request", p.wt.Branch+"  →  "+p.base, right)
 	var b strings.Builder
-	b.WriteString(sTitle.Render("Pull request") + sDim.Render(" · ") + sBold.Render(p.wt.Branch) + sDim.Render(" → ") + sCyan.Render(p.base) + "\n\n")
-	b.WriteString(sDim.Render("base     ") + sCyan.Render(p.base) + sDim.Render("   (t to choose another remote branch)") + "\n")
+	b.WriteString("\n " + section("Branches", w) + "\n")
+	b.WriteString(kv("branch", sBold.Render(p.wt.Branch)))
+	b.WriteString(kv("base", sCyan.Render(p.base)+sDim.Render("   t to choose another remote branch")))
 	in := p.info
 	if in == nil {
-		b.WriteString("\n" + p.spin.View() + " checking branch…\n")
-		return padBox(b.String())
+		b.WriteString("\n   " + p.spin.View() + " checking branch…\n")
+		return frame(e, header, b.String(), help("esc", "back"))
 	}
 	ps := in.ps
 	remoteName := ps.Remote
 	if remoteName == "" {
 		remoteName = "(none)"
 	}
-	b.WriteString(sDim.Render("remote   ") + remoteName + "\n")
+	b.WriteString(kv("remote", remoteName))
+
+	b.WriteString("\n " + section("Push", w) + "\n")
 	switch {
 	case ps.NoUpstream:
-		b.WriteString(sDim.Render("push     ") + sYellow.Render(fmt.Sprintf("not on remote yet — will run git push -u %s %s", ps.Remote, p.wt.Branch)) + "\n")
+		b.WriteString("   " + sYellow.Render(fmt.Sprintf("● not on the remote yet — will run git push -u %s %s", ps.Remote, p.wt.Branch)) + "\n")
 	case ps.NeedsPush:
-		b.WriteString(sDim.Render("push     ") + sYellow.Render(fmt.Sprintf("%d unpushed commit(s) — will push to %s", ps.Unpushed, ps.Upstream)) + "\n")
+		b.WriteString("   " + sYellow.Render(fmt.Sprintf("● %d unpushed commit(s) — will push to %s", ps.Unpushed, ps.Upstream)) + "\n")
 	default:
-		b.WriteString(sDim.Render("push     ") + sGreen.Render("up to date with "+ps.Upstream) + "\n")
+		b.WriteString("   " + sGreen.Render("✓ up to date with "+ps.Upstream) + "\n")
 	}
 	if ps.Uncommitted {
-		b.WriteString(sYellow.Render("! worktree has uncommitted changes (they won't be in the PR)") + "\n")
+		b.WriteString("   " + sYellow.Render("! worktree has uncommitted changes (they won't be in the PR)") + "\n")
 	}
+
+	b.WriteString("\n " + section("Link", w) + "\n")
 	if in.err != nil {
-		b.WriteString("\n" + sErr.Render(errText(in.err)) + "\n")
+		b.WriteString("   " + sErr.Render("✗ "+errText(in.err)) + "\n")
 	} else {
-		b.WriteString("\n" + sDim.Render("url      ") + truncate(in.url, p.e.width-12) + "\n")
+		b.WriteString("   " + sCyan.Underline(true).Render(truncate(in.url, w-4)) + "\n")
 	}
 	if p.err != nil {
-		b.WriteString("\n" + sErr.Render(errText(p.err)) + "\n")
+		b.WriteString("\n   " + sErr.Render("✗ "+errText(p.err)) + "\n")
 	}
 	if p.busy {
-		b.WriteString("\n" + p.spin.View() + " pushing and opening…\n")
+		b.WriteString("\n   " + p.spin.View() + " pushing and opening…\n")
 	} else if p.opened != "" {
-		b.WriteString("\n" + sOK.Render("✓ opened in browser") + "\n")
+		b.WriteString("\n   " + sOK.Render("✓ opened in browser") + "\n")
 	}
 	action := "open in browser"
 	if ps.NeedsPush {
 		action = "push & open in browser"
 	}
-	b.WriteString("\n" + help("enter", action, "t", "change base", "esc", "back"))
-	return padBox(b.String())
+	return frame(e, header, b.String(), help("enter", action, "t", "change base", "esc", "back"))
 }

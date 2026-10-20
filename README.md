@@ -116,7 +116,11 @@ they will do. Pass `--yes` to run them non-interactively or `--no-hooks` to skip
 ## Development
 
 ```sh
-go test ./...
-go build -o wrk ./cmd/wrk
+make            # build bin/wrk
+make run        # build and open the TUI
+make run ARGS="ls --json"
+make install    # go install with version info
+make check      # gofmt check, vet and tests
+make help       # list all targets
 ```
 # wrktree

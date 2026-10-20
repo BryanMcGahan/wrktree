@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/sahilm/fuzzy"
 )
 
@@ -276,19 +277,23 @@ func (c *create) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 func (c *create) View() string {
 	e := c.e
-	var b strings.Builder
-	b.WriteString(sTitle.Render("New worktree") + "\n\n")
+	w := e.width
+	right := ""
+	switch {
+	case c.busy:
+		right = c.spin.View() + " creating"
+	case c.fetching:
+		right = c.spin.View() + " loading PRs"
+	}
+	header := headerBar(w, "New worktree", e.m.Repo.Name, right)
+
 	label := func(s string, on bool) string {
 		if on {
 			return sAccent.Bold(true).Render(pad(s, 8))
 		}
 		return sDim.Render(pad(s, 8))
 	}
-	b.WriteString(label("Branch", c.focus == 0) + c.branch.View() + "\n")
-	b.WriteString(label("From", c.focus == 1) + c.from.View() + sDim.Render("  (new branches only, tab to edit)") + "\n")
-
-	// Preview of what will happen.
-	preview := ""
+	path := sDim.Render("—")
 	if len(c.rows) > 0 {
 		s := c.rows[c.cur]
 		name := s.value
@@ -301,60 +306,73 @@ func (c *create) View() string {
 			name = s.pr.Head
 		}
 		if name != "" {
-			preview = sDim.Render("path    ") + e.m.PathFor(name)
+			path = shortPath(e.m.PathFor(name))
 		}
 	}
-	b.WriteString(preview + "\n\n")
+	form := label("Branch", c.focus == 0) + c.branch.View() + "\n" +
+		label("From", c.focus == 1) + c.from.View() + sDim.Render("   new branches only · tab to edit") + "\n" +
+		label("Path", false) + path
+	var b strings.Builder
+	b.WriteString("\n" + indent(panel("Branch", form, w-2, 5, true), 1) + "\n\n")
 
-	listH := e.height - 12
+	var msg string
+	switch {
+	case c.busy:
+		msg = c.spin.View() + " creating worktree…"
+	case c.err != nil:
+		msg = sErr.Render("✗ " + errText(c.err))
+	}
+	b.WriteString(" " + section(fmt.Sprintf("Choose  %d", len(c.rows)), w-2) + "\n")
+
+	listH := e.height - 1 - 1 - 2 - 9
+	if msg != "" {
+		listH -= 2
+	}
 	start := 0
 	if c.cur >= listH {
 		start = c.cur - listH + 1
 	}
+	tagW := 0
+	for _, s := range c.rows {
+		tagW = max(tagW, lipgloss.Width(s.tag()))
+	}
+	tagW = min(max(tagW, 14), w/3)
+	textW := w - tagW - 8
 	for i := start; i < len(c.rows) && i < start+listH; i++ {
 		s := c.rows[i]
-		var text, tag string
+		var icon, text, tag string
 		if s.kind == sugNew {
 			from := strings.TrimSpace(c.from.Value())
 			if from == "" {
 				from = e.m.BaseBranch()
 			}
-			text = "+ create new branch " + s.value
-			tag = "from " + from
+			icon, text, tag = "+", "create new branch "+s.value, "from "+from
 		} else {
-			text = "  " + s.label()
-			tag = s.tag()
+			icon, text, tag = kindIcon(s.kind), s.label(), s.tag()
 		}
-		w := e.width - 4
 		if i == c.cur {
-			b.WriteString(selRow("▸"+text[1:]+"   "+tag, w) + "\n")
+			b.WriteString(" " + selRow("▸ "+icon+" "+pad(text, textW)+" "+tag, w-2) + "\n")
 		} else {
-			line := truncate(text, w-len(tag)-3)
-			b.WriteString(line + "   " + sDim.Render(tag) + "\n")
+			b.WriteString("   " + sDim.Render(icon) + " " + pad(text, textW) + " " + sDim.Render(truncate(tag, tagW)) + "\n")
 		}
 	}
 	if len(c.rows) == 0 && c.typed() == "" {
-		b.WriteString(sDim.Render("  type a name to create a branch, or pick an existing one") + "\n")
+		b.WriteString(sDim.Render("   type a name to create a branch, or pick an existing one") + "\n")
 	}
-	b.WriteString("\n")
-	switch {
-	case c.busy:
-		b.WriteString(c.spin.View() + " creating worktree…\n")
-	case c.err != nil:
-		b.WriteString(sErr.Render(errText(c.err)) + "\n")
-	case c.fetching:
-		b.WriteString(c.spin.View() + sDim.Render(" loading pull requests…") + "\n")
-	default:
-		b.WriteString("\n")
+	if msg != "" {
+		b.WriteString("\n " + msg + "\n")
 	}
-	b.WriteString(help("enter", "create", "↑/↓", "choose", "tab", "edit start point", "esc", "cancel"))
-	return padBox(b.String())
+	return frame(e, header, b.String(), help("enter", "create", "↑/↓", "choose", "tab", "edit start point", "esc", "cancel"))
 }
 
-func padBox(s string) string {
-	lines := strings.Split(s, "\n")
-	for i, l := range lines {
-		lines[i] = " " + l
+func kindIcon(k suggestKind) string {
+	switch k {
+	case sugLocal:
+		return "⎇"
+	case sugRemote:
+		return "☁"
+	case sugPR:
+		return "⇄"
 	}
-	return strings.Join(lines, "\n")
+	return "+"
 }

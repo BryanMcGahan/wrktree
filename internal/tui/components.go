@@ -226,41 +226,45 @@ func (p *picker) Update(msg tea.Msg) (screen, tea.Cmd) {
 }
 
 func (p *picker) View() string {
+	w := p.e.width
+	right := ""
+	if p.loading {
+		right = p.spin.View() + " loading"
+	}
+	header := headerBar(w, p.title, "", right)
 	var b strings.Builder
-	b.WriteString(sTitle.Render(p.title) + "\n\n")
-	b.WriteString(p.input.View() + "\n\n")
-	listH := p.e.height - 8
+	b.WriteString("\n" + indent(panel("Filter", p.input.View(), w-2, 3, true), 1) + "\n\n")
+	b.WriteString(" " + section(fmt.Sprintf("Results  %d", len(p.filtered)), w-2) + "\n")
+	listH := p.e.height - 1 - 1 - 2 - 6
 	switch {
 	case p.loading:
-		b.WriteString(p.spin.View() + " loading…\n")
+		b.WriteString("   " + p.spin.View() + " loading…\n")
 	case p.err != nil:
-		b.WriteString(sErr.Render(errText(p.err)) + "\n")
+		b.WriteString("   " + sErr.Render(errText(p.err)) + "\n")
 	case len(p.filtered) == 0:
 		if p.allowCustom && p.input.Value() != "" {
-			b.WriteString(sDim.Render("no matches — enter to use ") + sBold.Render(p.input.Value()) + "\n")
+			b.WriteString(sDim.Render("   no matches — enter to use ") + sBold.Render(p.input.Value()) + "\n")
 		} else {
-			b.WriteString(sDim.Render("no matches") + "\n")
+			b.WriteString(sDim.Render("   no matches") + "\n")
 		}
 	default:
 		start := 0
 		if p.cur >= listH {
 			start = p.cur - listH + 1
 		}
+		titleW := 0
+		for _, i := range p.filtered {
+			titleW = max(titleW, lipgloss.Width(p.items[i].title))
+		}
+		titleW = min(titleW+2, w/2)
 		for i := start; i < len(p.filtered) && i < start+listH; i++ {
 			it := p.items[p.filtered[i]]
-			w := p.e.width - 3
-			var line string
 			if i == p.cur {
-				line = selRow("▸ "+it.title+"  "+it.desc, w)
+				b.WriteString(" " + selRow("▸ "+pad(it.title, titleW)+" "+it.desc, w-2) + "\n")
 			} else {
-				line = "  " + truncate(it.title, w-2)
-				if rest := w - lipgloss.Width(line) - 2; it.desc != "" && rest > 0 {
-					line += "  " + sDim.Render(truncate(it.desc, rest))
-				}
+				b.WriteString("   " + pad(it.title, titleW) + " " + sDim.Render(truncate(it.desc, w-titleW-6)) + "\n")
 			}
-			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n" + help("↑/↓", "move", "enter", "select", "esc", "back"))
-	return lipgloss.NewStyle().Padding(0, 1).Render(b.String())
+	return frame(p.e, header, b.String(), help("↑/↓", "move", "enter", "select", "esc", "back"))
 }

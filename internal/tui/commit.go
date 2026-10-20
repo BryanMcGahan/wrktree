@@ -587,57 +587,54 @@ func (c *commit) View() string {
 	e := c.e
 	W, H := e.width, e.height-1
 
-	head := " " + sTitle.Render("Commit") + sDim.Render(" · ") + sBold.Render(c.branch) + sDim.Render(" · "+c.dir)
+	info := shortPath(c.dir)
+	right := ""
 	if c.amend {
-		head += "  " + sYellow.Render("[amend]")
+		right = "amending last commit"
 	}
+	header := headerBar(W, "Commit  "+c.branch, info, right)
 
-	msgH := 7 // subject + body(3) + counter + borders
-	footerH := 2
-	paneH := H - 1 - msgH - footerH
-	if paneH < 5 {
-		paneH = 5
-	}
-	fw := W / 3
-	if fw < 26 {
-		fw = 26
-	}
-	if fw > 50 {
-		fw = 50
-	}
+	msgH := 7 // subject + rule + body(3) + borders
+	footerH := 3
+	paneH := max(H-1-msgH-footerH, 5)
+	fw := min(max(W/3, 26), 50)
 	dw := W - fw
 
-	files := c.filesView(fw-4, paneH-2)
-	diff := c.diffView(dw-4, paneH-2)
-	box := func(s string, w, h int, focused bool) string {
-		st := sBox
-		if focused {
-			st = sFocusBox
+	staged, unstaged := 0, 0
+	for _, en := range c.entries {
+		if en.staged {
+			staged++
+		} else {
+			unstaged++
 		}
-		return st.Width(w - 2).Height(h - 2).Render(s)
 	}
+	filesTitle := fmt.Sprintf("Files  %d unstaged · %d staged", unstaged, staged)
 	panes := lipgloss.JoinHorizontal(lipgloss.Top,
-		box(files, fw, paneH, c.focus == focusFiles),
-		box(diff, dw, paneH, c.focus == focusDiff))
+		panel(filesTitle, c.filesView(fw-4, paneH-2), fw, paneH, c.focus == focusFiles),
+		panel(c.diffTitle(), c.diffView(dw-4, paneH-2), dw, paneH, c.focus == focusDiff))
 
-	c.subject.Width = W - 12
-	c.body.SetWidth(W - 6)
+	c.subject.Width = W - 14
+	c.body.SetWidth(W - 4)
 	n := len([]rune(c.subject.Value()))
-	counter := sDim.Render(fmt.Sprintf("%d", n))
+	counter := sDim.Render(fmt.Sprintf("%d/72", n))
 	if n > 72 {
-		counter = sRed.Render(fmt.Sprintf("%d", n))
+		counter = sRed.Render(fmt.Sprintf("%d/72", n))
 	} else if n > 50 {
-		counter = sYellow.Render(fmt.Sprintf("%d", n))
+		counter = sYellow.Render(fmt.Sprintf("%d/72", n))
 	}
-	msgContent := pad(c.subject.View(), W-10) + " " + counter + "\n" + sDim.Render(strings.Repeat("─", W-6)) + "\n" + c.body.View()
-	msgBox := box(msgContent, W, msgH, c.focus == focusSubject || c.focus == focusBody)
+	msgContent := pad(c.subject.View(), W-12) + " " + counter + "\n" + sRule.Render(strings.Repeat("─", W-4)) + "\n" + c.body.View()
+	msgTitle := "Message"
+	if c.amend {
+		msgTitle = "Message (amend)"
+	}
+	msgBox := panel(msgTitle, msgContent, W, msgH, c.focus == focusSubject || c.focus == focusBody)
 
 	var foot string
 	switch {
 	case c.busy:
 		foot = sAccent.Render(" committing…")
 	case c.err != nil:
-		foot = " " + sErr.Render(truncate(errText(c.err), W-2))
+		foot = " " + sErr.Render(truncate("✗ "+errText(c.err), W-2))
 	}
 	var keys string
 	switch c.focus {
@@ -648,7 +645,18 @@ func (c *commit) View() string {
 	default:
 		keys = help("tab", "next field", "ctrl+e", "open $EDITOR", "ctrl+s", "commit", "esc", "files")
 	}
-	return head + "\n" + panes + "\n" + msgBox + "\n" + foot + "\n " + truncate(keys, W-2)
+	return header + "\n" + panes + "\n" + msgBox + "\n" + foot + "\n" + footer(W, keys)
+}
+
+func (c *commit) diffTitle() string {
+	en := c.current()
+	if en == nil {
+		return "Diff"
+	}
+	if en.staged {
+		return "Staged · " + en.fc.Path + "  (space unstages)"
+	}
+	return "Unstaged · " + en.fc.Path + "  (space stages)"
 }
 
 func fileCode(en fileEntry) string {
@@ -753,17 +761,12 @@ func (c *commit) diffView(w, h int) string {
 	if c.diff == nil {
 		return ""
 	}
-	title := sDim.Render("unstaged changes")
-	if en.staged {
-		title = sGreen.Render("staged changes") + sDim.Render(" (space unstages)")
-	}
 	if c.diff.Binary {
-		return title + "\n\n" + sDim.Render("binary file — stage it as a whole from the file list")
+		return sDim.Render("binary file — stage it as a whole from the file list")
 	}
 	if len(c.rows) == 0 {
-		return title + "\n\n" + sDim.Render("no textual changes (mode change or empty file)")
+		return sDim.Render("no textual changes (mode change or empty file)")
 	}
-	h-- // title line
 	if c.dcur < c.dscroll+2 {
 		c.dscroll = c.dcur - 2
 	}
@@ -786,7 +789,7 @@ func (c *commit) diffView(w, h int) string {
 		}
 		return i >= a && i <= b
 	}
-	out := []string{title}
+	var out []string
 	for i := c.dscroll; i < len(c.rows) && i < c.dscroll+h; i++ {
 		r := c.rows[i]
 		text := strings.ReplaceAll(r.text, "\t", "    ")

@@ -1,3 +1,5 @@
 /wrk
+/bin/
+coverage.out
 /dist/
 .wrk.local.toml

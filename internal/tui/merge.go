@@ -351,132 +351,148 @@ func (ms *mergeScreen) keysDone(k tea.KeyMsg) (screen, tea.Cmd) {
 }
 
 func (ms *mergeScreen) View() string {
-	var b strings.Builder
-	b.WriteString(sTitle.Render("Merge") + sDim.Render(" · ") + sBold.Render(ms.src.Branch) + sDim.Render(" → ") + sCyan.Render(ms.target) + "\n\n")
+	e := ms.e
+	w := e.width
+	right := ""
+	if ms.state == mRunning || ms.pushing {
+		right = ms.spin.View() + " working"
+	}
+	header := headerBar(w, "Merge", ms.src.Branch+"  →  "+ms.target, right)
+	var body, keys string
 	switch ms.state {
 	case mConfig:
-		b.WriteString(ms.configView())
+		body, keys = ms.configView()
 	case mRunning:
-		b.WriteString(ms.spin.View() + " " + ms.strategy().Label() + "…\n")
+		body = "\n   " + ms.spin.View() + " " + ms.strategy().Label() + "…\n"
 	case mConflict:
-		b.WriteString(ms.conflictView())
+		body, keys = ms.conflictView()
 	case mDone:
-		b.WriteString(ms.doneView())
+		body, keys = ms.doneView()
 	}
 	if ms.err != nil {
-		b.WriteString("\n" + sErr.Render(errText(ms.err)) + "\n")
+		body += "\n " + sErr.Render("✗ "+errText(ms.err)) + "\n"
 	}
-	return padBox(b.String())
+	return frame(e, header, body, keys)
 }
 
-func (ms *mergeScreen) configView() string {
+func kv(label, value string) string {
+	return "   " + sDim.Render(pad(label, 10)) + value + "\n"
+}
+
+func (ms *mergeScreen) configView() (string, string) {
+	w := ms.e.width - 2
 	var b strings.Builder
-	b.WriteString(sDim.Render("target   ") + sCyan.Render(ms.target) + sDim.Render("   (t to choose another local or remote branch)") + "\n\n")
-	b.WriteString(sDim.Render("strategy") + "\n")
+	b.WriteString("\n " + section("Branches", w) + "\n")
+	b.WriteString(kv("source", sBold.Render(ms.src.Branch)))
+	b.WriteString(kv("target", sCyan.Render(ms.target)+sDim.Render("   t to choose another local or remote branch")))
+	p := ms.preview
+	if p != nil && p.TargetPath != "" {
+		b.WriteString(kv("runs in", shortPath(p.TargetPath)))
+	} else if p != nil && len(p.Problems) == 0 && ms.strategy() != merge.FastForward && ms.strategy() != merge.Rebase {
+		b.WriteString(kv("runs in", "a temporary worktree ("+p.LocalTarget+" is not checked out)"))
+	}
+
+	b.WriteString("\n " + section("Strategy", w) + "\n")
 	for i, s := range merge.Strategies {
-		mark := "  ○ "
-		line := fmt.Sprintf("%d %s", i+1, s.Label())
+		line := fmt.Sprintf("%d  %s", i+1, s.Label())
 		if i == ms.strat {
-			mark = sAccent.Render("  ● ")
-			line = sAccent.Bold(true).Render(line)
+			b.WriteString("   " + sAccent.Render("●") + " " + sAccent.Bold(true).Render(line) + "\n")
+		} else {
+			b.WriteString("   " + sDim.Render("○") + " " + line + "\n")
 		}
-		b.WriteString(mark + line + "\n")
 	}
 	if ms.strategy() == merge.Squash {
 		msg := ms.squash
 		if msg == "" {
 			msg = "(default: list of squashed commits)"
 		}
-		b.WriteString("\n" + sDim.Render("message  ") + truncate(strings.SplitN(strings.TrimSpace(msg), "\n", 2)[0], ms.e.width-14) + sDim.Render("  (e to edit)") + "\n")
+		b.WriteString(kv("message", truncate(strings.SplitN(strings.TrimSpace(msg), "\n", 2)[0], w-26)+sDim.Render("   e to edit")))
 	}
-	b.WriteString("\n")
-	p := ms.preview
+
+	b.WriteString("\n " + section("Preview", w) + "\n")
 	if p == nil {
-		b.WriteString(ms.spin.View() + " checking…\n")
-		return b.String()
-	}
-	if p.TargetPath != "" {
-		b.WriteString(sDim.Render("runs in  ") + p.TargetPath + "\n")
-	} else if len(p.Problems) == 0 && ms.strategy() != merge.FastForward && ms.strategy() != merge.Rebase {
-		b.WriteString(sDim.Render("runs in  ") + "a temporary worktree (" + p.LocalTarget + " is not checked out)\n")
+		b.WriteString("   " + ms.spin.View() + " checking…\n")
+		return b.String(), help("←/→", "strategy", "t", "target", "esc", "cancel")
 	}
 	for _, pr := range p.Problems {
-		b.WriteString(sErr.Render("✗ ") + sRed.Render(pr) + "\n")
+		b.WriteString("   " + sErr.Render("✗ ") + sRed.Render(pr) + "\n")
 	}
-	for _, w := range p.Warnings {
-		b.WriteString(sYellow.Render("! "+w) + "\n")
+	for _, wn := range p.Warnings {
+		b.WriteString("   " + sYellow.Render("! "+wn) + "\n")
 	}
 	if len(p.Commits) > 0 {
-		b.WriteString("\n" + sBold.Render(fmt.Sprintf("%d commit(s)", len(p.Commits))) + "\n")
-		maxC := ms.e.height - 24
-		if maxC < 3 {
-			maxC = 3
+		stat := ""
+		if p.Diffstat != "" {
+			lines := strings.Split(p.Diffstat, "\n")
+			stat = sDim.Render("  ·  " + strings.TrimSpace(lines[len(lines)-1]))
 		}
+		b.WriteString("   " + sBold.Render(fmt.Sprintf("%d commit(s)", len(p.Commits))) + stat + "\n")
+		maxC := max(ms.e.height-28, 3)
 		for i, c := range p.Commits {
 			if i >= maxC {
-				b.WriteString(sDim.Render(fmt.Sprintf("  … %d more", len(p.Commits)-maxC)) + "\n")
+				b.WriteString(sDim.Render(fmt.Sprintf("     … %d more", len(p.Commits)-maxC)) + "\n")
 				break
 			}
 			sha, subj, _ := strings.Cut(c, " ")
-			b.WriteString("  " + sYellow.Render(sha) + " " + truncate(subj, ms.e.width-14) + "\n")
-		}
-		if p.Diffstat != "" {
-			lines := strings.Split(p.Diffstat, "\n")
-			b.WriteString(sDim.Render(strings.TrimSpace(lines[len(lines)-1])) + "\n")
+			b.WriteString("     " + sYellow.Render(sha) + " " + truncate(subj, w-16) + "\n")
 		}
 	}
-	b.WriteString("\n")
 	if len(p.Problems) == 0 {
-		b.WriteString(help("enter", "merge", "←/→", "strategy", "t", "target", "esc", "cancel"))
-	} else {
-		b.WriteString(help("←/→", "strategy", "t", "target", "esc", "cancel"))
+		return b.String(), help("enter", "merge", "←/→ 1-4", "strategy", "t", "target", "esc", "cancel")
 	}
-	return b.String()
+	return b.String(), help("←/→ 1-4", "strategy", "t", "target", "esc", "cancel")
 }
 
-func (ms *mergeScreen) conflictView() string {
+func (ms *mergeScreen) conflictView() (string, string) {
+	w := ms.e.width - 2
 	var b strings.Builder
+	keys := help("o", "open in editor", "space", "mark resolved", "c", "continue", "A", "abort", "esc", "later")
 	c := ms.conflict
 	if c == nil {
-		return sDim.Render("no merge in progress") + "\n"
+		return "\n   " + sDim.Render("no merge in progress") + "\n", help("esc", "back")
 	}
-	op := "merge"
+	op := "Merge"
 	if c.Op == merge.Rebase {
-		op = "rebase"
+		op = "Rebase"
 	}
-	b.WriteString(sYellow.Render(fmt.Sprintf("⚠ %s stopped on conflicts", op)) + sDim.Render(" in "+c.Dir) + "\n\n")
+	b.WriteString("\n   " + sYellow.Bold(true).Render("⚠ "+op+" stopped on conflicts") + "\n")
+	b.WriteString(kv("in", shortPath(c.Dir)))
+	b.WriteString("\n " + section(fmt.Sprintf("Conflicted files  %d", len(c.Files)), w) + "\n")
 	if len(c.Files) == 0 {
-		b.WriteString(sGreen.Render("All conflicts resolved.") + " Press " + sKey.Render("c") + " to continue.\n")
+		b.WriteString("   " + sGreen.Render("✓ All conflicts resolved.") + " Press " + sKey.Render("c") + " to continue.\n")
 	}
 	for i, f := range c.Files {
 		if i == ms.ccur {
-			b.WriteString(selRow("▸ U "+f, ms.e.width-4) + "\n")
+			b.WriteString(" " + selRow("▸ U  "+f, w) + "\n")
 		} else {
-			b.WriteString("  " + sRed.Render("U") + " " + f + "\n")
+			b.WriteString("   " + sRed.Render("U") + "  " + f + "\n")
 		}
 	}
-	b.WriteString("\n" + help("o", "open in editor", "space", "mark resolved", "c", "continue", "A", "abort", "esc", "later"))
-	return b.String()
+	return b.String(), keys
 }
 
-func (ms *mergeScreen) doneView() string {
+func (ms *mergeScreen) doneView() (string, string) {
+	w := ms.e.width - 2
 	var b strings.Builder
-	b.WriteString(sOK.Render("✓ "+ms.res.Summary) + "\n\n")
+	b.WriteString("\n   " + sOK.Bold(true).Render("✓ "+ms.res.Summary) + "\n")
+	b.WriteString("\n " + section("Next steps", w) + "\n")
 	var keys []string
 	if ms.res.HasRemote {
 		switch {
 		case ms.pushing:
-			b.WriteString(ms.spin.View() + " pushing " + ms.res.Target + "…\n")
+			b.WriteString("   " + ms.spin.View() + " pushing " + ms.res.Target + "…\n")
 		case ms.pushed:
-			b.WriteString(sOK.Render("✓ pushed "+ms.res.Target) + "\n")
+			b.WriteString("   " + sOK.Render("✓ pushed "+ms.res.Target) + "\n")
 		default:
-			keys = append(keys, "p", "push "+ms.res.Target)
+			b.WriteString("   " + sKey.Render("p") + "  push " + ms.res.Target + "\n")
+			keys = append(keys, "p", "push")
 		}
 	}
 	if ms.src.Path != "" && !ms.src.Main {
-		keys = append(keys, "d", "remove worktree "+ms.src.Branch)
+		b.WriteString("   " + sKey.Render("d") + "  remove worktree " + ms.src.Branch + sDim.Render(" (branch kept)") + "\n")
+		keys = append(keys, "d", "remove worktree")
 	}
+	b.WriteString("   " + sKey.Render("enter") + "  back to worktrees\n")
 	keys = append(keys, "enter", "done")
-	b.WriteString("\n" + help(keys...))
-	return b.String()
+	return b.String(), help(keys...)
 }

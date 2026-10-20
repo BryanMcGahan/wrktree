@@ -9,6 +9,7 @@ import (
 	"github.com/BryanMcGahan/wrktree/internal/worktree"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type (
@@ -166,45 +167,59 @@ func (p *pruneScreen) confirm() tea.Cmd {
 }
 
 func (p *pruneScreen) View() string {
-	var b strings.Builder
+	e := p.e
+	w := e.width - 2
 	staleLabel := "off"
 	if d := staleSteps[p.stale]; d > 0 {
 		staleLabel = worktree.HumanDuration(d)
 	}
-	b.WriteString(sTitle.Render("Prune worktrees") + sDim.Render(" · merged into "+p.e.m.BaseBranch()+" · missing · stale: ") + sCyan.Render(staleLabel) + "\n\n")
+	right := ""
+	if p.loading || p.busy {
+		right = p.spin.View() + " working"
+	}
+	header := headerBar(e.width, "Prune worktrees", "merged into "+e.m.BaseBranch()+"  ·  missing  ·  stale: "+staleLabel, right)
+	var b strings.Builder
 	if p.done != nil {
+		b.WriteString("\n " + section("Last run", w) + "\n")
 		for _, r := range p.done.removed {
-			b.WriteString(sOK.Render("✓ removed "+r) + "\n")
+			b.WriteString("   " + sOK.Render("✓ removed "+r) + "\n")
 		}
 		for _, f := range p.done.failed {
-			b.WriteString(sYellow.Render("! skipped "+f) + "\n")
+			b.WriteString("   " + sYellow.Render("! skipped "+f) + "\n")
 		}
-		b.WriteString("\n")
 	}
+	selected := len(p.selected())
+	b.WriteString("\n " + section(fmt.Sprintf("Candidates  %d selected of %d", selected, len(p.cands)), w) + "\n")
 	switch {
 	case p.loading:
-		b.WriteString(p.spin.View() + " finding candidates…\n")
+		b.WriteString("   " + p.spin.View() + " finding candidates…\n")
 	case p.err != nil:
-		b.WriteString(sErr.Render(errText(p.err)) + "\n")
+		b.WriteString("   " + sErr.Render(errText(p.err)) + "\n")
 	case len(p.cands) == 0:
-		b.WriteString(sDim.Render("Nothing to prune.") + "\n")
+		b.WriteString("   " + sDim.Render("Nothing to prune.") + "\n")
 	}
+	nameW := 12
+	for _, c := range p.cands {
+		nameW = max(nameW, lipgloss.Width(c.Worktree.Name())+2)
+	}
+	nameW = min(nameW, w/2)
 	for i, c := range p.cands {
 		box := "[ ]"
 		if p.checked[i] {
 			box = "[x]"
 		}
-		line := fmt.Sprintf("%s %s", box, c.Worktree.Name())
-		reason := c.Reason
 		if i == p.cur {
-			b.WriteString(selRow(pad(line, 40)+"  "+reason, p.e.width-4) + "\n")
+			b.WriteString(" " + selRow("▸ "+box+" "+pad(c.Worktree.Name(), nameW)+c.Reason, w) + "\n")
 		} else {
-			b.WriteString(pad(line, 40) + "  " + sDim.Render(reason) + "\n")
+			mark := sDim.Render(box)
+			if p.checked[i] {
+				mark = sAccent.Render(box)
+			}
+			b.WriteString("   " + mark + " " + pad(c.Worktree.Name(), nameW) + sDim.Render(c.Reason) + "\n")
 		}
 	}
 	if p.busy {
-		b.WriteString("\n" + p.spin.View() + " removing…\n")
+		b.WriteString("\n   " + p.spin.View() + " removing…\n")
 	}
-	b.WriteString("\n" + help("space", "toggle", "a", "all", "s", "stale threshold", "enter", "remove selected", "esc", "back"))
-	return padBox(b.String())
+	return frame(e, header, b.String(), help("space", "toggle", "a", "all", "s", "stale threshold", "enter", "remove selected", "esc", "back"))
 }
